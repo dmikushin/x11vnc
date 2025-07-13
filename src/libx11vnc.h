@@ -28,7 +28,63 @@ typedef struct x11vnc_server x11vnc_server_t;
 #define X11VNC_ERROR_NO_MEMORY     -2
 #define X11VNC_ERROR_ALREADY_RUNNING -3
 #define X11VNC_ERROR_NOT_RUNNING   -4
-#define X11VNC_ERROR_INTERNAL      -5
+#define X11VNC_ERROR_DISPLAY_OPEN  -5
+#define X11VNC_ERROR_AUTH_FAILED   -6
+#define X11VNC_ERROR_INTERNAL      -99
+
+/* Event types for Phase 2 */
+typedef enum {
+    X11VNC_EVENT_STARTED,           /* Server started successfully */
+    X11VNC_EVENT_STOPPED,           /* Server stopped */
+    X11VNC_EVENT_CLIENT_CONNECTED,  /* Client connected */
+    X11VNC_EVENT_CLIENT_DISCONNECTED, /* Client disconnected */
+    X11VNC_EVENT_ERROR              /* Error occurred */
+} x11vnc_event_type_t;
+
+/* Event callback function type */
+typedef void (*x11vnc_event_callback_t)(
+    x11vnc_server_t* server,
+    x11vnc_event_type_t event_type,
+    const char* message,
+    void* user_data
+);
+
+/* Simple configuration structure for Phase 2 */
+typedef struct {
+    /* Display settings */
+    const char* display;            /* X11 display (e.g., ":0") */
+    const char* auth_file;          /* X authority file path */
+    
+    /* Network settings */
+    int port;                       /* VNC port (0 for auto, default 5900) */
+    bool localhost_only;            /* Only allow local connections */
+    bool ipv6;                      /* Enable IPv6 support */
+    
+    /* Security settings */
+    const char* password;           /* VNC password (NULL for none) */
+    const char* password_file;      /* Path to password file */
+    bool view_only;                 /* Read-only mode */
+    const char* allow_hosts;        /* Comma-separated allowed IPs */
+    
+    /* Behavior settings */
+    bool shared;                    /* Allow multiple clients */
+    bool forever;                   /* Keep running after last client */
+    bool once;                      /* Exit after first client disconnects */
+    
+    /* Performance settings */
+    int poll_interval_ms;           /* Screen polling interval */
+    bool use_shm;                   /* Use shared memory extension */
+    bool use_xdamage;               /* Use XDAMAGE extension */
+    bool wireframe;                 /* Wireframe mode for moving windows */
+    
+    /* Feature settings */
+    bool show_cursor;               /* Show remote cursor */
+    bool accept_bell;               /* Accept bell events */
+    bool accept_clipboard;          /* Accept clipboard changes */
+    const char* geometry;           /* Force screen geometry (WxH) */
+    const char* clip;               /* Clip region (WxH+X+Y) */
+    
+} x11vnc_simple_config_t;
 
 /**
  * Create a new x11vnc server instance
@@ -90,6 +146,59 @@ int x11vnc_server_get_client_count(x11vnc_server_t* server);
  * @return true if running, false otherwise
  */
 bool x11vnc_server_is_running(x11vnc_server_t* server);
+
+/* Phase 2 API Functions */
+
+/**
+ * Initialize configuration with defaults
+ * @param config Configuration structure to initialize
+ */
+void x11vnc_config_init_defaults(x11vnc_simple_config_t* config);
+
+/**
+ * Configure server without command line arguments
+ * @param server Server handle
+ * @param config Configuration structure
+ * @return 0 on success, negative error code on failure
+ */
+int x11vnc_server_configure(x11vnc_server_t* server, const x11vnc_simple_config_t* config);
+
+/**
+ * Start server using configuration (no command line args needed)
+ * @param server Server handle (must be configured first)
+ * @return 0 on success, negative error code on failure
+ */
+int x11vnc_server_start_configured(x11vnc_server_t* server);
+
+/**
+ * Set event callback for server events
+ * @param server Server handle
+ * @param callback Callback function (NULL to disable)
+ * @param user_data User data passed to callback
+ * @return 0 on success, negative error code on failure
+ */
+int x11vnc_server_set_event_callback(x11vnc_server_t* server, 
+                                    x11vnc_event_callback_t callback, 
+                                    void* user_data);
+
+/**
+ * Get current configuration
+ * @param server Server handle
+ * @param config Configuration structure to fill
+ * @return 0 on success, negative error code on failure
+ */
+int x11vnc_server_get_config(x11vnc_server_t* server, x11vnc_simple_config_t* config);
+
+/**
+ * Update configuration at runtime (some changes may require restart)
+ * @param server Server handle
+ * @param config New configuration
+ * @param restart_needed Set to true if restart is required for changes
+ * @return 0 on success, negative error code on failure
+ */
+int x11vnc_server_update_config(x11vnc_server_t* server, 
+                               const x11vnc_simple_config_t* config,
+                               bool* restart_needed);
 
 /* Legacy interface - for backwards compatibility */
 int x11vnc_main_legacy(int argc, char* argv[]);

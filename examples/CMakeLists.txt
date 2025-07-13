@@ -13,3 +13,10 @@ target_link_libraries(api_demo PRIVATE x11vnc_lib)
 target_include_directories(api_demo PRIVATE 
     ${CMAKE_SOURCE_DIR}/src
 )
+
+# Configuration demo example (Phase 2)
+add_executable(config_demo config_demo.c)
+target_link_libraries(config_demo PRIVATE x11vnc_lib)
+target_include_directories(config_demo PRIVATE 
+    ${CMAKE_SOURCE_DIR}/src
+)
