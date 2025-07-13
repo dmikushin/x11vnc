@@ -249,6 +249,12 @@ endif()
 
 add_subdirectory(misc)
 
+# Add examples if enabled
+option(BUILD_EXAMPLES "Build examples" ON)
+if(BUILD_EXAMPLES AND BUILD_X11VNC)
+    add_subdirectory(examples)
+endif()
+
 # Install files
 install(FILES x11vnc.1 DESTINATION share/man/man1)
 install(FILES x11vnc.desktop DESTINATION share/applications)

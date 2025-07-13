@@ -2038,7 +2038,7 @@ static void check_guess_auth_file(void)  {
 
 extern int is_decimal(char *);
 
-int main(int argc, char* argv[]) {
+int x11vnc_main_legacy(int argc, char* argv[]) {
 
 	int i, len, tmpi;
 	int ev, er, maj, min;

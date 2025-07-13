@@ -1,6 +1,6 @@
-# src/CMakeLists.txt for x11vnc executable
+# src/CMakeLists.txt for x11vnc library and executable
 
-# Source files for x11vnc
+# Source files for x11vnc library
 set(X11VNC_SOURCES
     8to24.c
     appshare.c
@@ -46,6 +46,7 @@ set(X11VNC_SOURCES
     xrandr.c
     xrecord.c
     xwrappers.c
+    libx11vnc.c
 )
 
 # Header files
@@ -103,24 +104,32 @@ set(X11VNC_HEADERS
     xrandr.h
     xrecord.h
     xwrappers.h
+    libx11vnc.h
 )
+
+# Create the x11vnc shared library
+add_library(x11vnc_lib SHARED ${X11VNC_SOURCES} ${X11VNC_HEADERS})
+set_target_properties(x11vnc_lib PROPERTIES OUTPUT_NAME "x11vnc")
+set_target_properties(x11vnc_lib PROPERTIES VERSION ${PROJECT_VERSION} SOVERSION 0)
 
 # Create the x11vnc executable
-add_executable(x11vnc ${X11VNC_SOURCES} ${X11VNC_HEADERS})
+add_executable(x11vnc x11vnc_main.c)
 
-# Include directories
-target_include_directories(x11vnc PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_BINARY_DIR}
-    ${LIBVNCSERVER_INCLUDE_DIRS}
-    ${LIBVNCCLIENT_INCLUDE_DIRS}
-)
-
-# Compiler flags
-target_compile_definitions(x11vnc PRIVATE
-    ${LIBVNCSERVER_CFLAGS_OTHER}
-    ${LIBVNCCLIENT_CFLAGS_OTHER}
-)
+# Include directories for both library and executable
+foreach(target x11vnc_lib x11vnc)
+    target_include_directories(${target} PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_BINARY_DIR}
+        ${LIBVNCSERVER_INCLUDE_DIRS}
+        ${LIBVNCCLIENT_INCLUDE_DIRS}
+    )
+    
+    # Compiler flags
+    target_compile_definitions(${target} PRIVATE
+        ${LIBVNCSERVER_CFLAGS_OTHER}
+        ${LIBVNCCLIENT_CFLAGS_OTHER}
+    )
+endforeach()
 
 # Libraries to link
 set(X11VNC_LIBRARIES
@@ -130,28 +139,30 @@ set(X11VNC_LIBRARIES
 
 # Platform-specific settings
 if(OSX)
-    # macOS frameworks
-    target_link_libraries(x11vnc PRIVATE
-        "-framework ApplicationServices"
-        "-framework Carbon"
-        "-framework IOKit"
-        "-framework Cocoa"
-    )
-    
-    if(HAVE_MACOSX_OPENGL_H)
-        target_link_libraries(x11vnc PRIVATE "-framework OpenGL")
+    # macOS frameworks for both targets
+    foreach(target x11vnc_lib x11vnc)
+        target_link_libraries(${target} PRIVATE
+            "-framework ApplicationServices"
+            "-framework Carbon"
+            "-framework IOKit"
+            "-framework Cocoa"
+        )
         
-        if(HAVE_X11)
-            # Special OpenGL library handling for X11 on macOS
-            set(GL_LIB "/System/Library/Frameworks/OpenGL.framework/Versions/A/Libraries/libGL.dylib")
-            target_link_libraries(x11vnc PRIVATE
-                "-dylib_file ${GL_LIB}:${GL_LIB}"
-            )
+        if(HAVE_MACOSX_OPENGL_H)
+            target_link_libraries(${target} PRIVATE "-framework OpenGL")
+            
+            if(HAVE_X11)
+                # Special OpenGL library handling for X11 on macOS
+                set(GL_LIB "/System/Library/Frameworks/OpenGL.framework/Versions/A/Libraries/libGL.dylib")
+                target_link_libraries(${target} PRIVATE
+                    "-dylib_file ${GL_LIB}:${GL_LIB}"
+                )
+            endif()
         endif()
-    endif()
-    
-    # Objective-C compilation for macOS sources
-    target_compile_options(x11vnc PRIVATE -ObjC)
+        
+        # Objective-C compilation for macOS sources
+        target_compile_options(${target} PRIVATE -ObjC)
+    endforeach()
 endif()
 
 # Windows/MinGW specific
@@ -166,7 +177,9 @@ endif()
 
 # X11 libraries
 if(HAVE_X11)
-    target_include_directories(x11vnc PRIVATE ${X11_INCLUDE_DIR})
+    foreach(target x11vnc_lib x11vnc)
+        target_include_directories(${target} PRIVATE ${X11_INCLUDE_DIR})
+    endforeach()
     list(APPEND X11VNC_LIBRARIES ${X11_LIBRARIES})
     
     # Add X11 extension libraries if available
@@ -200,7 +213,9 @@ endif()
 
 # SSL libraries
 if(HAVE_LIBSSL)
-    target_include_directories(x11vnc PRIVATE ${OPENSSL_INCLUDE_DIR})
+    foreach(target x11vnc_lib x11vnc)
+        target_include_directories(${target} PRIVATE ${OPENSSL_INCLUDE_DIR})
+    endforeach()
     list(APPEND X11VNC_LIBRARIES ${OPENSSL_LIBRARIES})
 endif()
 
@@ -212,27 +227,35 @@ endif()
 # DRM library
 if(HAVE_LIBDRM)
     list(APPEND X11VNC_LIBRARIES ${DRM_LIBRARY})
-    target_include_directories(x11vnc PRIVATE /usr/include/drm)
+    foreach(target x11vnc_lib x11vnc)
+        target_include_directories(${target} PRIVATE /usr/include/drm)
+    endforeach()
 endif()
 
 # Avahi libraries
 if(HAVE_AVAHI)
-    target_include_directories(x11vnc PRIVATE ${AVAHI_INCLUDE_DIRS})
-    target_compile_definitions(x11vnc PRIVATE ${AVAHI_CFLAGS_OTHER})
+    foreach(target x11vnc_lib x11vnc)
+        target_include_directories(${target} PRIVATE ${AVAHI_INCLUDE_DIRS})
+        target_compile_definitions(${target} PRIVATE ${AVAHI_CFLAGS_OTHER})
+    endforeach()
     list(APPEND X11VNC_LIBRARIES ${AVAHI_LIBRARIES})
 endif()
 
 # XI2 libraries
 if(HAVE_XI2)
-    target_include_directories(x11vnc PRIVATE ${XI2_INCLUDE_DIRS})
-    target_compile_definitions(x11vnc PRIVATE ${XI2_CFLAGS_OTHER})
+    foreach(target x11vnc_lib x11vnc)
+        target_include_directories(${target} PRIVATE ${XI2_INCLUDE_DIRS})
+        target_compile_definitions(${target} PRIVATE ${XI2_CFLAGS_OTHER})
+    endforeach()
     list(APPEND X11VNC_LIBRARIES ${XI2_LIBRARIES})
 endif()
 
 # Cairo libraries
 if(HAVE_CAIRO)
-    target_include_directories(x11vnc PRIVATE ${CAIRO_INCLUDE_DIRS})
-    target_compile_definitions(x11vnc PRIVATE ${CAIRO_CFLAGS_OTHER})
+    foreach(target x11vnc_lib x11vnc)
+        target_include_directories(${target} PRIVATE ${CAIRO_INCLUDE_DIRS})
+        target_compile_definitions(${target} PRIVATE ${CAIRO_CFLAGS_OTHER})
+    endforeach()
     list(APPEND X11VNC_LIBRARIES ${CAIRO_LIBRARIES})
 endif()
 
@@ -248,11 +271,23 @@ if(SOCKET_LIBRARY)
 endif()
 
 # Link all libraries
-target_link_libraries(x11vnc PRIVATE ${X11VNC_LIBRARIES})
+target_link_libraries(x11vnc_lib PRIVATE ${X11VNC_LIBRARIES})
+target_link_libraries(x11vnc PRIVATE x11vnc_lib)
 
-# Install the executable
+# Install targets
+install(TARGETS x11vnc_lib
+    LIBRARY DESTINATION lib
+    ARCHIVE DESTINATION lib
+    RUNTIME DESTINATION bin
+)
+
 install(TARGETS x11vnc
     RUNTIME DESTINATION bin
+)
+
+# Install public header
+install(FILES libx11vnc.h
+    DESTINATION include
 )
 
 # Special handling for large switch statements that compile slowly
