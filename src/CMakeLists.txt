@@ -104,13 +104,18 @@ set(X11VNC_HEADERS
     xrandr.h
     xrecord.h
     xwrappers.h
-    libx11vnc.h
 )
 
 # Create the x11vnc shared library
 add_library(x11vnc_lib SHARED ${X11VNC_SOURCES} ${X11VNC_HEADERS})
 set_target_properties(x11vnc_lib PROPERTIES OUTPUT_NAME "x11vnc")
 set_target_properties(x11vnc_lib PROPERTIES VERSION ${PROJECT_VERSION} SOVERSION 0)
+
+# Set public include directories for the library
+target_include_directories(x11vnc_lib PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+)
 
 # Create the x11vnc executable
 add_executable(x11vnc x11vnc_main.c)
@@ -286,7 +291,7 @@ install(TARGETS x11vnc
 )
 
 # Install public header
-install(FILES libx11vnc.h
+install(FILES ${CMAKE_SOURCE_DIR}/include/libx11vnc.h
     DESTINATION include
 )
 

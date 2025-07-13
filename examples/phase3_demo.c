@@ -19,7 +19,7 @@
 #include <unistd.h>
 #include <signal.h>
 #include <stdbool.h>
-#include "libx11vnc.h"
+#include <libx11vnc.h>
 
 static volatile bool keep_running = true;
 static x11vnc_server_t* global_server = NULL;
