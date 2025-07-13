@@ -20,3 +20,10 @@ target_link_libraries(config_demo PRIVATE x11vnc_lib)
 target_include_directories(config_demo PRIVATE 
     ${CMAKE_SOURCE_DIR}/src
 )
+
+# Advanced features demo example (Phase 3)
+add_executable(phase3_demo phase3_demo.c)
+target_link_libraries(phase3_demo PRIVATE x11vnc_lib)
+target_include_directories(phase3_demo PRIVATE 
+    ${CMAKE_SOURCE_DIR}/src
+)

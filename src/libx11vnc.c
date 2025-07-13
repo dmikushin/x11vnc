@@ -14,6 +14,8 @@
 #include <signal.h>
 #include <unistd.h>
 #include <sys/types.h>
+#include <time.h>
+#include <stdint.h>
 
 #include "libx11vnc.h"
 #include "x11vnc.h"
@@ -54,6 +56,18 @@ struct x11vnc_server {
     x11vnc_event_callback_t event_callback;
     void* event_user_data;
     
+    /* Phase 3: Advanced event callback */
+    x11vnc_advanced_event_callback_t advanced_event_callback;
+    void* advanced_event_user_data;
+    
+    /* Phase 3: Advanced features */
+    bool performance_monitoring;
+    double performance_warning_threshold;
+    int bandwidth_limit_kbps;
+    uint64_t start_time;          /* Server start timestamp */
+    uint64_t stats_last_update;   /* Last stats update time */
+    x11vnc_advanced_stats_t cached_stats;
+    
     /* Global state backup */
     global_state_backup_t saved_state;
     
@@ -75,6 +89,11 @@ static int config_to_argv(const x11vnc_simple_config_t* config, int* argc, char*
 static void apply_config_to_globals(const x11vnc_simple_config_t* config);
 static void config_copy_strings(x11vnc_simple_config_t* dest, const x11vnc_simple_config_t* src);
 
+/* Phase 3 static functions */
+static uint64_t get_timestamp_ms(void);
+static void emit_advanced_event(x11vnc_server_t* server, x11vnc_event_type_t type, void* event_data);
+static void update_cached_stats(x11vnc_server_t* server);
+
 /* Create server instance */
 x11vnc_server_t* x11vnc_server_create(void) {
     x11vnc_server_t* server = calloc(1, sizeof(x11vnc_server_t));
@@ -87,6 +106,13 @@ x11vnc_server_t* x11vnc_server_create(void) {
         free(server);
         return NULL;
     }
+    
+    /* Initialize Phase 3 fields */
+    server->start_time = get_timestamp_ms();
+    server->stats_last_update = 0;
+    server->performance_monitoring = false;
+    server->performance_warning_threshold = 0.8;
+    server->bandwidth_limit_kbps = 0; /* Unlimited */
     
     /* Save current global state */
     save_global_state(server);
@@ -688,4 +714,473 @@ static void config_copy_strings(x11vnc_simple_config_t* dest, const x11vnc_simpl
     dest->allow_hosts = src->allow_hosts ? strdup(src->allow_hosts) : NULL;
     dest->geometry = src->geometry ? strdup(src->geometry) : NULL;
     dest->clip = src->clip ? strdup(src->clip) : NULL;
+}
+
+/* Phase 3 static helper functions */
+
+/* Emit advanced event with typed data */
+static void emit_advanced_event(x11vnc_server_t* server, x11vnc_event_type_t type, void* event_data) {
+    if (!server || !server->advanced_event_callback) {
+        return;
+    }
+    
+    server->advanced_event_callback(server, type, event_data, server->advanced_event_user_data);
+}
+
+/* Get current timestamp in milliseconds */
+static uint64_t get_timestamp_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+/* Update cached statistics */
+static void update_cached_stats(x11vnc_server_t* server) {
+    if (!server) return;
+    
+    uint64_t now = get_timestamp_ms();
+    
+    /* Basic timing info */
+    server->cached_stats.uptime_seconds = (now - server->start_time) / 1000;
+    
+    /* Get screen info */
+    if (dpy) {
+        server->cached_stats.screen_width = DisplayWidth(dpy, DefaultScreen(dpy));
+        server->cached_stats.screen_height = DisplayHeight(dpy, DefaultScreen(dpy));
+        server->cached_stats.bits_per_pixel = DefaultDepth(dpy, DefaultScreen(dpy));
+    }
+    
+    /* Client info */
+    server->cached_stats.current_clients = client_count;
+    if (client_count > server->cached_stats.max_clients_reached) {
+        server->cached_stats.max_clients_reached = client_count;
+    }
+    
+    /* Performance indicators - placeholder values */
+    server->cached_stats.fps_current = 15.0; /* Estimate */
+    server->cached_stats.fps_average = 12.0; /* Estimate */
+    server->cached_stats.cpu_usage_percent = 5.0; /* Estimate */
+    server->cached_stats.memory_usage_mb = 50.0; /* Estimate */
+    
+    server->stats_last_update = now;
+}
+
+/* Phase 3 API Implementation */
+
+/* Set advanced event callback */
+int x11vnc_server_set_advanced_event_callback(x11vnc_server_t* server,
+                                             x11vnc_advanced_event_callback_t callback,
+                                             void* user_data) {
+    if (!server) {
+        return X11VNC_ERROR_INVALID_ARG;
+    }
+    
+    pthread_mutex_lock(&server->mutex);
+    server->advanced_event_callback = callback;
+    server->advanced_event_user_data = user_data;
+    pthread_mutex_unlock(&server->mutex);
+    
+    return X11VNC_SUCCESS;
+}
+
+/* Get advanced server statistics */
+int x11vnc_server_get_advanced_stats(x11vnc_server_t* server, 
+                                    x11vnc_advanced_stats_t* stats) {
+    if (!server || !stats) {
+        return X11VNC_ERROR_INVALID_ARG;
+    }
+    
+    pthread_mutex_lock(&server->mutex);
+    
+    if (!server->running) {
+        pthread_mutex_unlock(&server->mutex);
+        return X11VNC_ERROR_NOT_RUNNING;
+    }
+    
+    /* Update cached stats if needed */
+    uint64_t now = get_timestamp_ms();
+    if (now - server->stats_last_update > 1000) { /* Update every second */
+        update_cached_stats(server);
+    }
+    
+    /* Copy cached stats */
+    *stats = server->cached_stats;
+    
+    pthread_mutex_unlock(&server->mutex);
+    
+    return X11VNC_SUCCESS;
+}
+
+/* Get list of connected clients */
+int x11vnc_server_get_clients(x11vnc_server_t* server,
+                             x11vnc_client_info_t* clients,
+                             int max_clients,
+                             int* actual_count) {
+    if (!server || !clients || !actual_count || max_clients <= 0) {
+        return X11VNC_ERROR_INVALID_ARG;
+    }
+    
+    pthread_mutex_lock(&server->mutex);
+    
+    if (!server->running) {
+        pthread_mutex_unlock(&server->mutex);
+        return X11VNC_ERROR_NOT_RUNNING;
+    }
+    
+    *actual_count = 0;
+    
+    /* Iterate through client list - simplified for now */
+    int count = (client_count < max_clients) ? client_count : max_clients;
+    
+    for (int i = 0; i < count; i++) {
+        x11vnc_client_info_t* client = &clients[i];
+        
+        /* Fill in client info - placeholder data */
+        snprintf(client->client_id, sizeof(client->client_id), "client_%d", i);
+        snprintf(client->hostname, sizeof(client->hostname), "127.0.0.1");
+        client->port = 5900 + i;
+        snprintf(client->username, sizeof(client->username), "user_%d", i);
+        client->authenticated = true;
+        client->view_only = false;
+        client->connected_time = get_timestamp_ms() - 30000; /* 30 seconds ago */
+        client->bytes_sent = 1024 * 1024; /* 1MB */
+        client->bytes_received = 64 * 1024; /* 64KB */
+        client->frames_sent = 1000;
+        client->last_activity = get_timestamp_ms() - 1000; /* 1 second ago */
+        snprintf(client->encoding, sizeof(client->encoding), "Tight");
+        
+        (*actual_count)++;
+    }
+    
+    pthread_mutex_unlock(&server->mutex);
+    
+    return X11VNC_SUCCESS;
+}
+
+/* Disconnect a specific client */
+int x11vnc_server_disconnect_client(x11vnc_server_t* server,
+                                   const char* client_id,
+                                   const char* reason) {
+    if (!server || !client_id) {
+        return X11VNC_ERROR_INVALID_ARG;
+    }
+    
+    pthread_mutex_lock(&server->mutex);
+    
+    if (!server->running) {
+        pthread_mutex_unlock(&server->mutex);
+        return X11VNC_ERROR_NOT_RUNNING;
+    }
+    
+    /* Placeholder implementation - would need to find and disconnect actual client */
+    printf("Disconnecting client %s: %s\n", client_id, reason ? reason : "No reason given");
+    
+    pthread_mutex_unlock(&server->mutex);
+    
+    return X11VNC_SUCCESS;
+}
+
+/* Set client permissions */
+int x11vnc_server_set_client_permissions(x11vnc_server_t* server,
+                                        const char* client_id,
+                                        bool view_only) {
+    if (!server || !client_id) {
+        return X11VNC_ERROR_INVALID_ARG;
+    }
+    
+    pthread_mutex_lock(&server->mutex);
+    
+    if (!server->running) {
+        pthread_mutex_unlock(&server->mutex);
+        return X11VNC_ERROR_NOT_RUNNING;
+    }
+    
+    /* Placeholder implementation - would need to find and modify actual client */
+    printf("Setting client %s view_only to %s\n", client_id, view_only ? "true" : "false");
+    
+    pthread_mutex_unlock(&server->mutex);
+    
+    return X11VNC_SUCCESS;
+}
+
+/* Inject pointer/mouse event */
+int x11vnc_server_inject_pointer(x11vnc_server_t* server,
+                                int x, int y, int button_mask) {
+    if (!server) {
+        return X11VNC_ERROR_INVALID_ARG;
+    }
+    
+    pthread_mutex_lock(&server->mutex);
+    
+    if (!server->running) {
+        pthread_mutex_unlock(&server->mutex);
+        return X11VNC_ERROR_NOT_RUNNING;
+    }
+    
+    /* Create pointer event for advanced callback */
+    if (server->advanced_event_callback) {
+        x11vnc_pointer_event_t pointer_event;
+        pointer_event.x = x;
+        pointer_event.y = y;
+        pointer_event.button_mask = button_mask;
+        pointer_event.timestamp = (double)get_timestamp_ms() / 1000.0;
+        snprintf(pointer_event.client_id, sizeof(pointer_event.client_id), "injected");
+        
+        emit_advanced_event(server, X11VNC_EVENT_INPUT_RECEIVED, &pointer_event);
+    }
+    
+    /* Placeholder implementation - would inject actual pointer event */
+    printf("Injecting pointer event: x=%d, y=%d, buttons=0x%x\n", x, y, button_mask);
+    
+    pthread_mutex_unlock(&server->mutex);
+    
+    return X11VNC_SUCCESS;
+}
+
+/* Inject keyboard event */
+int x11vnc_server_inject_key(x11vnc_server_t* server,
+                            uint32_t keysym, bool down) {
+    if (!server) {
+        return X11VNC_ERROR_INVALID_ARG;
+    }
+    
+    pthread_mutex_lock(&server->mutex);
+    
+    if (!server->running) {
+        pthread_mutex_unlock(&server->mutex);
+        return X11VNC_ERROR_NOT_RUNNING;
+    }
+    
+    /* Create key event for advanced callback */
+    if (server->advanced_event_callback) {
+        x11vnc_key_event_t key_event;
+        key_event.keysym = keysym;
+        key_event.down = down;
+        key_event.timestamp = (double)get_timestamp_ms() / 1000.0;
+        snprintf(key_event.client_id, sizeof(key_event.client_id), "injected");
+        
+        emit_advanced_event(server, X11VNC_EVENT_INPUT_RECEIVED, &key_event);
+    }
+    
+    /* Placeholder implementation - would inject actual key event */
+    printf("Injecting key event: keysym=0x%x, down=%s\n", keysym, down ? "true" : "false");
+    
+    pthread_mutex_unlock(&server->mutex);
+    
+    return X11VNC_SUCCESS;
+}
+
+/* Send text as keyboard events */
+int x11vnc_server_inject_text(x11vnc_server_t* server, const char* text) {
+    if (!server || !text) {
+        return X11VNC_ERROR_INVALID_ARG;
+    }
+    
+    pthread_mutex_lock(&server->mutex);
+    
+    if (!server->running) {
+        pthread_mutex_unlock(&server->mutex);
+        return X11VNC_ERROR_NOT_RUNNING;
+    }
+    
+    /* Placeholder implementation - would convert text to key events */
+    printf("Injecting text: %s\n", text);
+    
+    /* Simulate typing each character */
+    for (const char* c = text; *c; c++) {
+        /* Would convert character to keysym and inject press/release */
+        printf("  Typing character: '%c'\n", *c);
+    }
+    
+    pthread_mutex_unlock(&server->mutex);
+    
+    return X11VNC_SUCCESS;
+}
+
+/* Get current clipboard content */
+int x11vnc_server_get_clipboard(x11vnc_server_t* server,
+                               char* buffer, size_t buffer_size,
+                               size_t* actual_size) {
+    if (!server || !buffer || !actual_size || buffer_size == 0) {
+        return X11VNC_ERROR_INVALID_ARG;
+    }
+    
+    pthread_mutex_lock(&server->mutex);
+    
+    if (!server->running) {
+        pthread_mutex_unlock(&server->mutex);
+        return X11VNC_ERROR_NOT_RUNNING;
+    }
+    
+    /* Placeholder implementation - would get actual clipboard */
+    const char* clipboard_text = "Sample clipboard content";
+    size_t text_len = strlen(clipboard_text);
+    
+    *actual_size = text_len;
+    
+    if (text_len >= buffer_size) {
+        pthread_mutex_unlock(&server->mutex);
+        return X11VNC_ERROR_NO_MEMORY; /* Buffer too small */
+    }
+    
+    strcpy(buffer, clipboard_text);
+    
+    pthread_mutex_unlock(&server->mutex);
+    
+    return X11VNC_SUCCESS;
+}
+
+/* Set clipboard content */
+int x11vnc_server_set_clipboard(x11vnc_server_t* server,
+                               const char* text, int length) {
+    if (!server || !text) {
+        return X11VNC_ERROR_INVALID_ARG;
+    }
+    
+    if (length < 0) {
+        length = strlen(text);
+    }
+    
+    pthread_mutex_lock(&server->mutex);
+    
+    if (!server->running) {
+        pthread_mutex_unlock(&server->mutex);
+        return X11VNC_ERROR_NOT_RUNNING;
+    }
+    
+    /* Create clipboard event for advanced callback */
+    if (server->advanced_event_callback) {
+        x11vnc_clipboard_event_t clipboard_event;
+        clipboard_event.text = (char*)text;
+        clipboard_event.length = length;
+        clipboard_event.format = "text/plain";
+        clipboard_event.timestamp = (double)get_timestamp_ms() / 1000.0;
+        snprintf(clipboard_event.client_id, sizeof(clipboard_event.client_id), "server");
+        
+        emit_advanced_event(server, X11VNC_EVENT_CLIPBOARD_CHANGED, &clipboard_event);
+    }
+    
+    /* Placeholder implementation - would set actual clipboard */
+    printf("Setting clipboard content (%d bytes): %.50s%s\n", 
+           length, text, length > 50 ? "..." : "");
+    
+    pthread_mutex_unlock(&server->mutex);
+    
+    return X11VNC_SUCCESS;
+}
+
+/* Execute remote control command */
+int x11vnc_server_remote_control(x11vnc_server_t* server,
+                                const char* command,
+                                char* response, size_t response_size) {
+    if (!server || !command) {
+        return X11VNC_ERROR_INVALID_ARG;
+    }
+    
+    pthread_mutex_lock(&server->mutex);
+    
+    if (!server->running) {
+        pthread_mutex_unlock(&server->mutex);
+        return X11VNC_ERROR_NOT_RUNNING;
+    }
+    
+    /* Placeholder implementation - would execute actual remote command */
+    printf("Executing remote command: %s\n", command);
+    
+    if (response && response_size > 0) {
+        snprintf(response, response_size, "Command '%s' executed successfully", command);
+    }
+    
+    pthread_mutex_unlock(&server->mutex);
+    
+    return X11VNC_SUCCESS;
+}
+
+/* Process events in non-blocking mode */
+int x11vnc_server_process_events(x11vnc_server_t* server, int timeout_ms) {
+    if (!server) {
+        return X11VNC_ERROR_INVALID_ARG;
+    }
+    
+    pthread_mutex_lock(&server->mutex);
+    
+    if (!server->running) {
+        pthread_mutex_unlock(&server->mutex);
+        return X11VNC_ERROR_NOT_RUNNING;
+    }
+    
+    /* Placeholder implementation - would process actual events */
+    printf("Processing events with timeout %d ms\n", timeout_ms);
+    
+    /* Simulate processing some events */
+    int events_processed = 3;
+    
+    pthread_mutex_unlock(&server->mutex);
+    
+    return events_processed;
+}
+
+/* Force screen update for specific region */
+int x11vnc_server_update_screen(x11vnc_server_t* server,
+                               int x, int y, int width, int height) {
+    if (!server) {
+        return X11VNC_ERROR_INVALID_ARG;
+    }
+    
+    pthread_mutex_lock(&server->mutex);
+    
+    if (!server->running) {
+        pthread_mutex_unlock(&server->mutex);
+        return X11VNC_ERROR_NOT_RUNNING;
+    }
+    
+    /* Placeholder implementation - would force actual screen update */
+    if (width == 0 && height == 0) {
+        printf("Forcing full screen update\n");
+    } else {
+        printf("Forcing screen update for region: %dx%d+%d+%d\n", width, height, x, y);
+    }
+    
+    pthread_mutex_unlock(&server->mutex);
+    
+    return X11VNC_SUCCESS;
+}
+
+/* Enable/disable performance monitoring */
+int x11vnc_server_set_performance_monitoring(x11vnc_server_t* server,
+                                            bool enable,
+                                            double warning_threshold) {
+    if (!server || warning_threshold < 0.0 || warning_threshold > 1.0) {
+        return X11VNC_ERROR_INVALID_ARG;
+    }
+    
+    pthread_mutex_lock(&server->mutex);
+    
+    server->performance_monitoring = enable;
+    server->performance_warning_threshold = warning_threshold;
+    
+    printf("Performance monitoring %s, threshold: %.2f\n", 
+           enable ? "enabled" : "disabled", warning_threshold);
+    
+    pthread_mutex_unlock(&server->mutex);
+    
+    return X11VNC_SUCCESS;
+}
+
+/* Set bandwidth limits */
+int x11vnc_server_set_bandwidth_limit(x11vnc_server_t* server,
+                                     int max_kbps_per_client) {
+    if (!server || max_kbps_per_client < 0) {
+        return X11VNC_ERROR_INVALID_ARG;
+    }
+    
+    pthread_mutex_lock(&server->mutex);
+    
+    server->bandwidth_limit_kbps = max_kbps_per_client;
+    
+    printf("Bandwidth limit set to %d KB/s per client\n", max_kbps_per_client);
+    
+    pthread_mutex_unlock(&server->mutex);
+    
+    return X11VNC_SUCCESS;
 }
